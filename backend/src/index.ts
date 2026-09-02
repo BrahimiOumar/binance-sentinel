@@ -36,6 +36,21 @@ app.get("/oauth/callback", (req, res) => {
   });
 });
 
+app.get("/.well-known/oauth-client-metadata.json", (_req, res) => {
+  res.json({
+    client_id:
+      "https://binance-sentinel.onrender.com/.well-known/oauth-client-metadata.json",
+    client_name: "Binance Sentinel",
+    client_uri: "https://binance-sentinel.onrender.com",
+    redirect_uris: [
+      "https://binance-sentinel.onrender.com/oauth/callback"
+    ],
+    response_types: ["code"],
+    grant_types: ["authorization_code"],
+    token_endpoint_auth_method: "none"
+  });
+});
+
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Binance Sentinel backend running on port ${PORT}`);
 });
