@@ -19,6 +19,23 @@ app.get("/health", (_req, res) => {
   });
 });
 
+app.get("/oauth/callback", (req, res) => {
+  const { code, state, error, error_description } = req.query;
+
+  if (error) {
+    return res.status(400).json({
+      error,
+      error_description,
+    });
+  }
+
+  res.json({
+    message: "OAuth callback received",
+    code_received: Boolean(code),
+    state_received: Boolean(state),
+  });
+});
+
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Binance Sentinel backend running on port ${PORT}`);
 });
