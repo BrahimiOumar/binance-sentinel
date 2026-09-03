@@ -1,4 +1,4 @@
-import express from "express";
+import express, { Request, Response } from "express";
 import { randomUUID } from "node:crypto";
 import {
   discoverOAuthServerInfo,
@@ -9,98 +9,69 @@ import {
 const app = express();
 app.use(express.json());
 
-const PORT = Number(process.env.PORT) || 3000;
+const PORT: number = Number(process.env.PORT) || 3000;
 
-const MCP_URL = new URL(
-  "https://agent.binance.com/mcp/agentic"
-);
+// URL officielle du protocole MCP Binance Agent OS
+const MCP_URL = new URL("https://binance.com");
 
-const CALLBACK_URL =
-  "https://binance-sentinel.onrender.com/oauth/callback";
+// Vos URLs Render de Production
+const CALLBACK_URL = "https://onrender.com";
+const CLIENT_ID = "https://onrender.com";
 
-const CLIENT_ID =
-  "https://binance-sentinel.onrender.com/.well-known/oauth-client-metadata.json";
-
-/**
- * OAuth client metadata.
- *
- * Binance Agent OS supports CIMD, so our client_id is the public
- * metadata URL above.
- */
 const clientInformation = {
   client_id: CLIENT_ID,
   client_name: "Binance Sentinel",
-  client_uri: "https://binance-sentinel.onrender.com",
   redirect_uris: [CALLBACK_URL],
-  response_types: ["code"],
-  grant_types: ["authorization_code"],
-  token_endpoint_auth_method: "none" as const,
 };
 
-/**
- * Temporary storage for the first MVP test.
- *
- * IMPORTANT:
- * This is intentionally global for now.
- * Later this must become per-user/session storage.
- */
-let pendingOAuth: {
+// Interface pour typer correctement la session temporaire OAuth
+interface PendingOAuthSession {
   state: string;
   codeVerifier: string;
-} | null = null;
+}
 
+// Typage explicite pour corriger l'erreur de votre capture d'écran
+let pendingOAuth: PendingOAuthSession | null = null;
 let accessToken: string | null = null;
 
-app.get("/", (_req, res) => {
+/**
+ * 🛠️ Route qui sert le fichier de métadonnées requis par Binance
+ */
+app.get("/.well-known/oauth-client-metadata.json", (_req: Request, res: Response) => {
+  res.setHeader("Content-Type", "application/json");
+  return res.json({
+    client_id: CLIENT_ID,
+    client_name: "Binance Sentinel",
+    redirect_uris: [CALLBACK_URL],
+    response_types: ["code"],
+    grant_types: ["authorization_code"],
+    token_endpoint_auth_method: "none",
+    scope: "market:read"
+  });
+});
+
+app.get("/", (_req: Request, res: Response) => {
   res.json({
     name: "Binance Sentinel",
     status: "online",
   });
 });
 
-app.get("/health", (_req, res) => {
+app.get("/health", (_req: Request, res: Response) => {
   res.json({
     status: "ok",
   });
 });
 
 /**
- * Public Client Metadata Document
- *
- * Binance can retrieve this URL to identify our OAuth client.
+ * Démarrer le flux de consentement Binance OAuth
  */
-app.get(
-  "/.well-known/oauth-client-metadata.json",
-  (_req, res) => {
-    res.json({
-      client_id: CLIENT_ID,
-      client_name: "Binance Sentinel",
-      client_uri: "https://binance-sentinel.onrender.com",
-      redirect_uris: [CALLBACK_URL],
-      response_types: ["code"],
-      grant_types: ["authorization_code"],
-      token_endpoint_auth_method: "none",
-    });
-  }
-);
-
-/**
- * Start Binance OAuth.
- */
-app.get("/oauth/start", async (_req, res) => {
+app.get("/oauth/start", async (_req: Request, res: Response) => {
   try {
-    console.log("Discovering Binance OAuth server...");
-
     const oauthInfo = await discoverOAuthServerInfo(MCP_URL);
-
-    console.log(
-      "Authorization server:",
-      oauthInfo.authorizationServerUrl
-    );
-
     const state = randomUUID();
 
-    const result = await startAuthorization(
+    const { authorizationUrl, codeVerifier } = await startAuthorization(
       oauthInfo.authorizationServerUrl,
       {
         metadata: oauthInfo.authorizationServerMetadata,
@@ -108,175 +79,79 @@ app.get("/oauth/start", async (_req, res) => {
         redirectUrl: CALLBACK_URL,
         state,
         resource: MCP_URL,
+        scope: "market:read"
       }
     );
 
     pendingOAuth = {
       state,
-      codeVerifier: result.codeVerifier,
+      codeVerifier,
     };
 
-    console.log("OAuth state created.");
-    console.log("Redirecting user to Binance...");
-
-    return res.redirect(result.authorizationUrl.toString());
+    console.log("Redirection vers Binance OAuth...");
+    res.redirect(authorizationUrl.toString());
   } catch (error) {
-    console.error("OAuth start error:", error);
-
-    return res.status(500).json({
-      error: "Failed to start Binance OAuth",
-    });
+    console.error("Erreur lors du démarrage OAuth :", error);
+    res.status(500).json({ error: "Failed to start Binance OAuth" });
   }
 });
 
 /**
- * Binance OAuth callback.
+ * Redirection de retour après validation Binance
  */
-app.get("/oauth/callback", async (req, res) => {
+app.get("/oauth/callback", async (req: Request, res: Response) => {
   try {
-    const code =
-      typeof req.query.code === "string"
-        ? req.query.code
-        : undefined;
+    const { code, state, iss, error, error_description } = req.query;
 
-    const state =
-      typeof req.query.state === "string"
-        ? req.query.state
-        : undefined;
-
-    const iss =
-      typeof req.query.iss === "string"
-        ? req.query.iss
-        : undefined;
-
-    const error =
-      typeof req.query.error === "string"
-        ? req.query.error
-        : undefined;
-
-    const errorDescription =
-      typeof req.query.error_description === "string"
-        ? req.query.error_description
-        : undefined;
-
-    /**
-     * Binance rejected/cancelled authorization.
-     */
     if (error) {
-      console.error(
-        "Binance OAuth error:",
-        error,
-        errorDescription ?? ""
-      );
-
-      return res.status(400).json({
-        error,
-        error_description: errorDescription ?? null,
-      });
+      return res.status(400).json({ error, error_description });
     }
 
-    /**
-     * We need an OAuth transaction.
-     */
-    if (!pendingOAuth) {
-      return res.status(400).json({
-        error: "No pending OAuth transaction",
-      });
+    if (!pendingOAuth || !state || String(state) !== pendingOAuth.state) {
+      return res.status(400).json({ error: "Invalid OAuth state" });
     }
 
-    /**
-     * Validate state BEFORE exchanging the authorization code.
-     */
-    if (!state || state !== pendingOAuth.state) {
-      console.error("OAuth state mismatch.");
-
-      pendingOAuth = null;
-
-      return res.status(400).json({
-        error: "Invalid OAuth state",
-      });
-    }
-
-    /**
-     * Authorization code is mandatory.
-     */
     if (!code) {
-      pendingOAuth = null;
-
-      return res.status(400).json({
-        error: "Missing authorization code",
-      });
+      return res.status(400).json({ error: "Missing authorization code" });
     }
 
-    console.log("OAuth callback received.");
-    console.log("Authorization code received: yes");
-
-    /**
-     * Discover the authorization server again.
-     */
     const oauthInfo = await discoverOAuthServerInfo(MCP_URL);
 
-    /**
-     * Exchange authorization code for Binance Agent OS token.
-     */
     const tokens = await exchangeAuthorization(
       oauthInfo.authorizationServerUrl,
       {
         metadata: oauthInfo.authorizationServerMetadata,
         clientInformation,
-        authorizationCode: code,
-        iss,
+        authorizationCode: String(code),
+        iss: iss ? String(iss) : undefined,
         codeVerifier: pendingOAuth.codeVerifier,
         redirectUri: CALLBACK_URL,
         resource: MCP_URL,
       }
     );
 
-    /**
-     * NEVER log the actual token.
-     */
     accessToken = tokens.access_token;
-
-    /**
-     * OAuth transaction completed.
-     */
     pendingOAuth = null;
 
-    console.log(
-      "Binance OAuth authorization successful."
-    );
+    console.log("Authentification réussie !");
 
     return res.json({
       success: true,
       message: "Binance authorization successful",
-      access_token_received: Boolean(tokens.access_token),
-      token_type: tokens.token_type ?? null,
-      expires_in: tokens.expires_in ?? null,
+      access_token_received: Boolean(accessToken),
     });
   } catch (error) {
-    console.error("OAuth callback error:", error);
-
-    pendingOAuth = null;
-
+    console.error("Erreur lors du traitement du callback OAuth :", error);
     return res.status(500).json({
       error: "Failed to exchange Binance authorization code",
     });
   }
 });
 
-/**
- * OAuth status.
- *
- * Temporary endpoint for testing.
- */
-app.get("/oauth/status", (_req, res) => {
-  res.json({
-    authorized: Boolean(accessToken),
-  });
+app.get("/oauth/status", (_req: Request, res: Response) => {
+  res.json({ authorized: Boolean(accessToken) });
 });
 
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(
-    `Binance Sentinel backend running on port ${PORT}`
-  );
+  console.log(`Backend Binance Sentinel actif sur le port ${PORT}`);
 });
