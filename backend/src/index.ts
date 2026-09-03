@@ -88,6 +88,20 @@ app.get("/oauth/start", async (_req, res) => {
 /**
  * Binance OAuth callback
  */
+
+app.get("/.well-known/oauth-client-metadata.json", (_req, res) => {
+  res.json({
+    client_id: CLIENT_ID,
+    client_name: "Binance Sentinel",
+    redirect_uris: [CALLBACK_URL],
+    grant_types: ["authorization_code", "refresh_token"],
+    response_types: ["code"],
+    token_endpoint_auth_method: "none",
+    scope: "openid profile", // ajuste selon les scopes que le MCP expose
+  });
+});
+
+
 app.get("/oauth/callback", async (req, res) => {
   try {
     const {
